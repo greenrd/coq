@@ -785,7 +785,7 @@ let evar_dependency_closure n sigma =
     if n=0 then l
     else
       let l' =
-        list_map_append (fun (evk,_) -> ExistentialMap.find evk graph) l in
+        list_map_append (fun (evk,_) -> try ExistentialMap.find evk graph with Not_found -> []) l in
       aux (n-1) (list_uniquize (Sort.list order (l@l'))) in
   aux n (undefined_list sigma)
 

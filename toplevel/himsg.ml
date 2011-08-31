@@ -289,12 +289,12 @@ let explain_ill_formed_rec_body env err names i fixenv vdefj =
       str "Recursive call forbidden in the type of a recursive definition" ++
       spc () ++ pr_lconstr_env env c
   | RecCallInCaseFun c ->
-      str "Recursive call in a branch of" ++ spc () ++ pr_lconstr_env env c
+      str "Invalid recursive call in a branch of" ++ spc () ++ pr_lconstr_env env c
   | RecCallInCaseArg c ->
-      str "Recursive call in the argument of cases in" ++ spc () ++
+      str "Invalid recursive call in the argument of \"match\" in" ++ spc () ++
       pr_lconstr_env env c
   | RecCallInCasePred c ->
-      str "Recursive call in the type of cases in" ++  spc () ++
+      str "Invalid recursive call in the \"return\" clause of \"match\" in" ++  spc () ++
       pr_lconstr_env env c
   | NotGuardedForm c ->
       str "Sub-expression " ++ pr_lconstr_env env c ++
@@ -579,7 +579,7 @@ let explain_label_already_declared l =
   str ("The label "^string_of_label l^" is already declared.")
 
 let explain_application_to_not_path _ =
-  str "Application to not path."
+  str "Application of modules is restricted to paths."
 
 let explain_not_a_functor mtb =
   str "Application of not a functor."
@@ -668,7 +668,7 @@ let explain_incorrect_with_in_module () =
   str "The syntax \"with\" is not allowed for modules."
 
 let explain_incorrect_module_application () =
-  str "Module application to a module type."
+  str "Illegal application to a module type."
 
 open Modintern
 
@@ -697,7 +697,7 @@ let explain_no_instance env (_,id) l =
     prlist_with_sep pr_spc (pr_lconstr_env env) l
 
 let pr_constraints printenv env evm =
-  let evm = Evarutil.nf_evar_map_undefined evm in
+  let evm = Evd.undefined_evars (Evarutil.nf_evar_map_undefined evm) in
   let l = Evd.to_list evm in
   let (ev, evi) = List.hd l in
     if List.for_all (fun (ev', evi') ->

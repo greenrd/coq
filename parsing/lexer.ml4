@@ -205,6 +205,9 @@ let check_ident str =
   in
   loop_id false (Stream.of_string str)
 
+let is_ident str =
+  try let _ = check_ident str in true with Error.E _ -> false
+
 (* Keyword and symbol dictionary *)
 let token_tree = ref empty_ttree
 
@@ -456,6 +459,11 @@ let parse_after_qmark bp s =
 	  | Utf8Token (UnicodeLetter, _) -> LEFTQMARK
 	  | AsciiChar | Utf8Token _ | EmptyStream -> fst (process_chars bp '?' s)
 
+let blank_or_eof cs =
+  match Stream.peek cs with
+    | None -> true
+    | Some (' ' | '\t' | '\n' |'\r') -> true
+    | _ -> false
 
 (* Parse a token in a char stream *)
 
@@ -464,9 +472,14 @@ let rec next_token = parser bp
       comm_loc bp; push_char c; next_token s
   | [< ''$' as c; t = parse_after_special c bp >] ep ->
       comment_stop bp; (t, (ep, bp))
-  | [< ''.' as c; t = parse_after_special c bp >] ep ->
+  | [< ''.' as c; t = parse_after_special c bp; s >] ep ->
       comment_stop bp;
-      if Flags.do_beautify() && t=KEYWORD "." then between_com := true;
+      (* We enforce that "." should either be part of a larger keyword,
+         for instance ".(", or followed by a blank or eof. *)
+      if t = KEYWORD "." then begin
+	if not (blank_or_eof s) then err (bp,ep+1) Undefined_token;
+	if Flags.do_beautify() then between_com := true;
+      end;
       (t, (bp,ep))
   | [< ''?'; s >] ep ->
       let t = parse_after_qmark bp s in comment_stop bp; (t, (ep, bp))
@@ -503,6 +516,12 @@ let rec next_token = parser bp
 	    comment_stop bp; t
 	| EmptyStream ->
 	    comment_stop bp; (EOI, (bp, bp + 1))
+
+(* (* Debug: uncomment this for tracing tokens seen by coq...*)
+let next_token s =
+  let (t,(bp,ep)) = next_token s in Printf.eprintf "[%s]\n%!" (Tok.to_string t);
+  (t,(bp,ep))
+*)
 
 (* Location table system for creating tables associating a token count
    to its location in a char stream (the source) *)
@@ -608,9 +627,7 @@ END
 (** Terminal symbols interpretation *)
 
 let is_ident_not_keyword s =
-  match s.[0] with
-    | 'a'..'z' | 'A'..'Z' | '_' -> not (is_keyword s)
-    | _ -> false
+  is_ident s && not (is_keyword s)
 
 let is_number s =
   let rec aux i =

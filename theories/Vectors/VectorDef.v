@@ -18,6 +18,7 @@ have to be the same. complain if you see mistakes ... *)
 
 Require Import Arith_base.
 Require Vectors.Fin.
+Import EqNotations.
 Open Local Scope nat_scope.
 
 (**

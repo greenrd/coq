@@ -23,4 +23,5 @@ Declare ML Module "dp_plugin".
 Declare ML Module "recdef_plugin".
 Declare ML Module "subtac_plugin".
 Declare ML Module "xml_plugin".
-Global Set Default Proof Mode "Classic".
+(* Default substrings not considered by queries like SearchAbout *)
+Add Search Blacklist "_admitted" "_subproof" "Private_".

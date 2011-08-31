@@ -50,6 +50,8 @@ Table of contents:
 (************************************************************************)
 (** * Definition of dependent equality and equivalence with equality of dependent pairs *)
 
+Import EqNotations.
+
 Section Dependent_Equality.
 
   Variable U : Type.

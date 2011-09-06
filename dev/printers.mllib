@@ -89,6 +89,7 @@ Typeclasses
 Detyping
 Indrec
 Coercion
+Zipper
 Unification
 Cases
 Pretyping

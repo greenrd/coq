@@ -12,6 +12,7 @@ open Names
 open Term
 open Sign
 open Environ
+open Zipper
 
 (** Universes *)
 val new_univ_level : unit -> Univ.universe_level
@@ -252,6 +253,8 @@ val is_section_variable : identifier -> bool
 val isGlobalRef : constr -> bool
 
 val has_polymorphic_type : constant -> bool
+
+val context_to_env : context -> env -> env
 
 (** Combinators on judgments *)
 

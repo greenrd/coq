@@ -15,6 +15,7 @@ open Sign
 open Environ
 open Libnames
 open Nametab
+open Zipper
 
 (* Sorts and sort family *)
 
@@ -466,6 +467,16 @@ let iter_constr_with_full_binders g f l c = match kind_of_term c with
       let l' = array_fold_left2 (fun l na t -> g (na,None,t) l) l lna tl in
       Array.iter (f l) tl;
       Array.iter (f l') bl
+
+let binding_of = function
+  | Prod0 (true, na, t)
+  | Lambda1 (na,t) -> [(na, None, t)]
+  | LetIn2 (x,y,z) -> [(x, Some y, z)]
+  | Fix0 (_, PrecDec1 (x,y,z))
+  | CoFix0 (_, PrecDec1 (x,y,z)) -> fold_rec_types (fun h t -> h :: t) (x,y,z) []
+  | _ -> []
+
+let context_to_env ctx = push_rel_context (List.flatten (List.map binding_of ctx))
 
 (***************************)
 (* occurs check functions  *)

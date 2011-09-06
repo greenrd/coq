@@ -25,6 +25,7 @@ open Pretype_errors
 open Retyping
 open Coercion.Default
 open Recordops
+open Zipper
 
 let occur_meta_or_undefined_evar evd c =
   let rec occrec c = match kind_of_term c with
@@ -37,32 +38,6 @@ let occur_meta_or_undefined_evar evd c =
     | Sort s when is_sort_variable evd s -> raise Occur
     | _ -> iter_constr occrec c
   in try occrec c; false with Occur | Not_found -> true
-
-(* if lname_typ is [xn,An;..;x1,A1] and l is a list of terms,
-   gives [x1:A1]..[xn:An]c' such that c converts to ([x1:A1]..[xn:An]c' l) *)
-
-let abstract_scheme env c l lname_typ =
-  List.fold_left2
-    (fun t (locc,a) (na,_,ta) ->
-       let na = match kind_of_term a with Var id -> Name id | _ -> na in
-(* [occur_meta ta] test removed for support of eelim/ecase but consequences
-   are unclear...
-       if occur_meta ta then error "cannot find a type for the generalisation"
-       else *) if occur_meta a then mkLambda_name env (na,ta,t)
-       else mkLambda_name env (na,ta,subst_term_occ locc a t))
-    c
-    (List.rev l)
-    lname_typ
-
-let abstract_list_all env evd typ c l =
-  let ctxt,_ = splay_prod_n env evd (List.length l) typ in
-  let l_with_all_occs = List.map (function a -> (all_occurrences,a)) l in
-  let p = abstract_scheme env c l_with_all_occs ctxt in
-  try
-    if is_conv_leq env evd (Typing.type_of env evd p) typ then p
-    else error "abstract_list_all"
-  with UserError _ | Type_errors.TypeError _ ->
-    error_cannot_find_well_typed_abstraction env evd p l
 
 (**)
 
@@ -1104,6 +1079,128 @@ let w_unify_to_subterm_list env flags hdmeta oplist t evd =
 	raise (PretypeError (env,evd,NoOccurrenceFound (op, None))))
     oplist
     (evd,[])
+
+module SubstBinder = struct
+  type t = int * int * constr
+
+  let add_bindings i = function
+    | (r,nb,q) -> (r + i, nb + i, lift i q)
+
+  let remove_bindings i = add_bindings (-i)
+end
+
+module Z = EZipper (SubstBinder)
+open Z
+
+let replace_args_with_metas t = match kind_of_term t with
+  | App(c,al) ->
+    let ms = Array.map (fun _ -> Evarutil.new_meta ()) al in
+    (ms,mkApp(c,Array.map mkMeta ms))
+  | _ -> raise (Invalid_argument "Application required")
+
+let find_open depth c =
+  let frels = Intset.elements (free_rels c) in
+  if depth = 0 then frels else List.filter (fun i -> i > depth) frels
+
+let find_closed depth c =
+  if depth = 0 then []
+  else
+    let frels = Intset.elements (free_rels c) in
+    List.filter (fun i -> i <= depth) frels
+
+let array_bag_build n l =
+  let ab = Array.make n [] in
+  List.iter (function
+    | (i,x) -> ab.(i) <- x :: ab.(i)) l;
+  ab
+
+let bogus = mkRel 0
+
+let abstract_follow_deps env evd c l lname_type =
+  let l' = List.rev l in
+  let env' = push_rel_context lname_type env in
+  let type_of ctx c = get_type_of (context_to_env ctx env') evd c in
+  let open_args nb ft at =
+    let (ms,mft) = replace_args_with_metas ft in
+    let cv_pb = CONV in
+    let flags = default_unify_flags in
+    let evd = Array.fold_left (fun e m -> meta_declare m bogus e) evd ms in
+    let evd = w_unify_0 env' cv_pb flags mft at evd in
+    Array.map (fun m -> find_open nb (meta_value evd m)) ms
+  in
+  let rec subst = function
+    | ((r,nb,q as st), ctx, t as z) ->
+      if eq_constr t q then
+        follow (st, ctx, mkRel r)
+      else match dfs_step true z with
+        | Inl c -> c
+        | Inr z -> subst z
+  and follow = function
+    | (_, [], _ as z) -> subst z
+    | ((r,nb,q), App1 (_,(i,_)) :: ctx, t as z) -> (match up z with
+        | Some (st, ctx, t2) ->
+          (match kind_of_term t2 with
+            | App (c,al) ->
+              let ty = type_of ctx c in
+              (match fst (splay_prod_n env evd (i + 1) ty) with
+                | ((_,_,ft) :: ps) ->
+                  (match kind_of_term ft with
+                    | App (_,fa) ->
+                      let at = type_of ctx t in
+                      let oata = open_args nb ft at in
+                      let outer_args oas ia =
+                        if oas = [] then []
+                        else
+                          let lps = List.length ps in
+                          let ca = find_closed lps ia in
+                          list_cartesian (fun cl oa -> (lps-cl,oa)) ca oas
+                      in
+                      (match List.flatten (Array.to_list (array_map2 outer_args oata fa)) with
+                        | [] -> subst z
+                        | pairs ->
+                          let oa = array_bag_build (Array.length al) pairs in
+                          let al = array_map2 (List.fold_left (fun a o -> substStart o a (lift nb (List.nth l' (o - nb - 1))))) al oa
+                          in follow (st, ctx, mkApp (c,al)))
+                    | _ -> subst z)
+                | _ -> assert false)
+            | _ -> assert false)
+        | _ -> assert false)
+    | _ -> error "Not implemented"
+  and substStart r a o = subst ((r, 0, o), [], a)
+  in List.fold_left (fun c -> function | (na,_,ta) -> mkLambda_name env (na,ta,c)) (substStart 1 c (List.hd l')) lname_type
+
+(* if lname_typ is [xn,An;..;x1,A1] and l is a list of terms,
+   gives [x1:A1]..[xn:An]c' such that c converts to ([x1:A1]..[xn:An]c' l) *)
+
+let abstract_scheme env c l lname_typ =
+  List.fold_left2
+    (fun t (locc,a) (na,_,ta) ->
+       let na = match kind_of_term a with Var id -> Name id | _ -> na in
+(* [occur_meta ta] test removed for support of eelim/ecase but consequences
+   are unclear...
+       if occur_meta ta then error "cannot find a type for the generalisation"
+       else *) if occur_meta a then mkLambda_name env (na,ta,t)
+       else mkLambda_name env (na,ta,subst_term_occ locc a t))
+    c
+    (List.rev l)
+    lname_typ
+
+let abstract_list_all env evd typ c l =
+  let ctxt,_ = splay_prod_n env evd (List.length l) typ in
+  let l_with_all_occs = List.map (function a -> (all_occurrences,a)) l in
+  let p = abstract_scheme env c l_with_all_occs ctxt in
+  try
+    if
+      try
+        is_conv_leq env evd (Typing.type_of env evd p) typ
+      with Type_errors.TypeError _ ->
+        false
+    then p
+        else
+          let p = abstract_follow_deps env evd c l ctxt in
+          if is_conv_leq env evd (Typing.type_of env evd p) typ then p else error "abstract_list_all"
+  with UserError _ | Type_errors.TypeError _ ->
+    error_cannot_find_well_typed_abstraction env evd p l
 
 let secondOrderAbstraction env flags typ (p, oplist) evd =
   (* Remove delta when looking for a subterm *)

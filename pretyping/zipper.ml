@@ -102,7 +102,7 @@ module EZipper (B : Binder) = struct
         | LetIn (na,b,t,c) -> LetIn (na, (x, LetIn0 (na,t,c) :: ds, b), (x, LetIn1 (na,b,c) :: ds, t), (g 1 x, LetIn2 (na,b,t) :: ds, c))
         | App (c,al) -> App ((x, App0 al :: ds, c), extract_array (fun a -> App1 (c,a)) al)
         | Evar (e,al) -> Evar (e, extract_array (fun a -> Evar0 (e,a)) al)
-        | Case (ci,p,c,bl) -> Case (ci, (x, Case0 (false,ci,c,bl) :: ds, p), (x, Case0 (true,ci,p,bl) :: ds, c), extract_array (fun a -> Case1 (ci,c,p,a)) bl)
+        | Case (ci,p,c,bl) -> Case (ci, (x, Case0 (false,ci,c,bl) :: ds, p), (x, Case0 (true,ci,p,bl) :: ds, c), extract_array (fun a -> Case1 (ci,p,c,a)) bl)
         | Fix f -> Fix (extract_precdec (fun x -> Fix0 x) f)
         | CoFix f -> CoFix (extract_precdec (fun x -> CoFix0 x) f)
 

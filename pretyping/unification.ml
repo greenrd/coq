@@ -1136,7 +1136,6 @@ let abstract_follow_deps env evd c l lname_type =
         | Inl c -> c
         | Inr z -> subst z
   and follow = function
-    | (_, [], _ as z) -> subst z
     | ((r,nb,q), App1 (_,(i,_)) :: ctx, t as z) -> (match up z with
         | Some (st, ctx, t2) ->
           (match kind_of_term t2 with
@@ -1165,7 +1164,7 @@ let abstract_follow_deps env evd c l lname_type =
                 | _ -> assert false)
             | _ -> assert false)
         | _ -> assert false)
-    | _ -> error "Not implemented"
+    | z -> subst z
   and substStart r a o = subst ((r, 0, o), [], a)
   in List.fold_left (fun c -> function | (na,_,ta) -> mkLambda_name env (na,ta,c)) (substStart 1 c (List.hd l')) lname_type
 

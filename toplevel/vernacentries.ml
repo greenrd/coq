@@ -834,7 +834,7 @@ let vernac_declare_arguments local r l nargs flags =
     match sr with
     | ConstRef _ as c ->
        Tacred.set_simpl_behaviour local c (rargs, nargs, flags)
-    | _ -> error "Recursive arguments can only be declared for constants"
+    | _ -> error "Simpl behaviour can be declared for constants only"
 ;;
 
 let vernac_reserve bl =

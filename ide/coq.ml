@@ -73,11 +73,11 @@ let check_connection args =
     | _ -> raise (Coqtop_output lines)
   with
     | End_of_file ->
-      safe_prerr_endline "Cannot start connection with coqtop";
+      Minilib.safe_prerr_endline "Cannot start connection with coqtop";
       exit 1
     | Coqtop_output lines ->
-      safe_prerr_endline "Connection with coqtop failed:";
-      List.iter safe_prerr_endline lines;
+      Minilib.safe_prerr_endline "Connection with coqtop failed:";
+      List.iter Minilib.safe_prerr_endline lines;
       exit 1
 
 (** It is tempting to merge the following function with the previous one,
@@ -98,11 +98,11 @@ let check_coqlib args =
     | _ -> raise (Coqtop_output lines)
   with
     | End_of_file ->
-      safe_prerr_endline "Cannot start connection with coqtop";
+      Minilib.safe_prerr_endline "Cannot start connection with coqtop";
       exit 1
     | Coqtop_output lines ->
-      safe_prerr_endline "Connection with coqtop failed:";
-      List.iter safe_prerr_endline lines;
+      Minilib.safe_prerr_endline "Connection with coqtop failed:";
+      List.iter Minilib.safe_prerr_endline lines;
       exit 1
 
 
@@ -199,13 +199,12 @@ let eval_call coqtop (c:'a Ide_intf.call) =
   flush coqtop.cin;
   (Marshal.from_channel: in_channel -> 'a Ide_intf.value) coqtop.cout
 
-let interp coqtop b s = eval_call coqtop (Ide_intf.interp (b,s))
-let raw_interp coqtop s = eval_call coqtop (Ide_intf.raw_interp s)
-let read_stdout coqtop = eval_call coqtop Ide_intf.read_stdout
+let interp coqtop ?(raw=false) ?(verbose=true) s =
+  eval_call coqtop (Ide_intf.interp (raw,verbose,s))
 let rewind coqtop i = eval_call coqtop (Ide_intf.rewind i)
-let is_in_loadpath coqtop s = eval_call coqtop (Ide_intf.is_in_loadpath s)
-let make_cases coqtop s = eval_call coqtop (Ide_intf.make_cases s)
-let current_status coqtop = eval_call coqtop Ide_intf.current_status
+let inloadpath coqtop s = eval_call coqtop (Ide_intf.inloadpath s)
+let mkcases coqtop s = eval_call coqtop (Ide_intf.mkcases s)
+let status coqtop = eval_call coqtop Ide_intf.status
 
 module PrintOpt =
 struct
@@ -227,8 +226,8 @@ struct
     List.fold_left
       (fun acc cmd -> 
          let str = (if value then "Set" else "Unset") ^ " Printing " ^ cmd ^ "." in
-         match raw_interp coqtop str with
-           | Ide_intf.Good () -> acc
+         match interp coqtop ~raw:true ~verbose:false str with
+           | Ide_intf.Good _ -> acc
            | Ide_intf.Fail (l,errstr) ->  Ide_intf.Fail (l,"Could not eval \""^str^"\": "^errstr)
       )
       (Ide_intf.Good ())
@@ -242,8 +241,8 @@ struct
     state_hack (Ide_intf.Good ())
 end
 
-let current_goals coqtop =
+let goals coqtop =
   match PrintOpt.enforce_hack coqtop with
-    | Ide_intf.Good () -> eval_call coqtop Ide_intf.current_goals
+    | Ide_intf.Good () -> eval_call coqtop Ide_intf.goals
     | Ide_intf.Fail str -> Ide_intf.Fail str
 

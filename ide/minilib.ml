@@ -74,3 +74,75 @@ let home =
 
 let coqlib = ref ""
 let coqtop_path = ref ""
+
+(* On a Win32 application with no console, writing to stderr raise
+   a Sys_error "bad file descriptor", hence the "try" below.
+   Ideally, we should re-route message to a log file somewhere, or
+   print in the response buffer.
+*)
+
+let safe_prerr_endline s =
+  try prerr_endline s;flush stderr with _ -> ()
+
+(* Hints to partially detects if two paths refer to the same repertory *)
+let rec remove_path_dot p =
+  let curdir = Filename.concat Filename.current_dir_name "" in (* Unix: "./" *)
+  let n = String.length curdir in
+  let l = String.length p in
+  if l > n && String.sub p 0 n = curdir then
+    let n' =
+      let sl = String.length Filename.dir_sep in
+      let i = ref n in
+	while !i <= l - sl && String.sub p !i sl = Filename.dir_sep do i := !i + sl done; !i in
+    remove_path_dot (String.sub p n' (l - n'))
+  else
+    p
+
+let strip_path p =
+  let cwd = Filename.concat (Sys.getcwd ()) "" in (* Unix: "`pwd`/" *)
+  let n = String.length cwd in
+  let l = String.length p in
+  if l > n && String.sub p 0 n = cwd then
+    let n' =
+      let sl = String.length Filename.dir_sep in
+      let i = ref n in
+	while !i <= l - sl && String.sub p !i sl = Filename.dir_sep do i := !i + sl done; !i in
+    remove_path_dot (String.sub p n' (l - n'))
+  else
+    remove_path_dot p
+
+let canonical_path_name p =
+  let current = Sys.getcwd () in
+  try
+    Sys.chdir p;
+    let p' = Sys.getcwd () in
+    Sys.chdir current;
+    p'
+  with Sys_error _ ->
+    (* We give up to find a canonical name and just simplify it... *)
+    strip_path p
+
+let correct_path f dir = if Filename.is_relative f then Filename.concat dir f else f
+
+(*
+  checks if two file names refer to the same (existing) file by
+  comparing their device and inode.
+  It seems that under Windows, inode is always 0, so we cannot
+  accurately check if
+
+*)
+(* Optimised for partial application (in case many candidates must be
+   compared to f1). *)
+let same_file f1 =
+  try
+    let s1 = Unix.stat f1 in
+    (fun f2 ->
+      try
+        let s2 = Unix.stat f2 in
+        s1.Unix.st_dev = s2.Unix.st_dev &&
+          if Sys.os_type = "Win32" then f1 = f2
+          else s1.Unix.st_ino = s2.Unix.st_ino
+      with
+          Unix.Unix_error _ -> false)
+  with
+      Unix.Unix_error _ -> (fun _ -> false)

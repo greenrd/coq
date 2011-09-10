@@ -8,18 +8,6 @@
 
 (* créer un Makefile pour un développement Coq automatiquement *)
 
-type target =
-  | ML of string (* ML file : foo.ml -> (ML "foo.ml") *)
-  | MLI of string (* MLI file : foo.mli -> (MLI "foo.mli") *)
-  | ML4 of string (* ML4 file : foo.ml4 -> (ML4 "foo.ml4") *)
-  | MLLIB of string (* MLLIB file : foo.mllib -> (MLLIB "foo.mllib") *)
-  | V of string  (* V file : foo.v -> (V "foo") *)
-  | Special of string * string * string (* file, dependencies, command *)
-  | Subdir of string
-  | Def of string * string (* X=foo -> Def ("X","foo") *)
-  | Include of string
-  | RInclude of string * string (* -R physicalpath logicalpath *)
-
 let output_channel = ref stdout
 let makefile_name = ref "Makefile"
 let make_name = ref ""
@@ -29,10 +17,6 @@ let some_mlfile = ref false
 let some_mlifile = ref false
 let some_ml4file = ref false
 let some_mllibfile = ref false
-
-let opt = ref "-opt"
-let impredicative_set = ref false
-let no_install = ref false
 
 let print x = output_string !output_channel x
 let printf x = Printf.fprintf !output_channel x
@@ -65,7 +49,7 @@ let usage () =
 
 coq_makefile [subdirectory] .... [file.v] ... [file.ml[i4]?] ... [file.mllib]
   ... [-custom command dependencies file] ... [-I dir] ... [-R physicalpath
-  logicalpath] ... [VARIABLE = value] ...  [-opt|-byte] [-impredicative-set]
+  logicalpath] ... [VARIABLE = value] ...  [-arg opt] ... [-opt|-byte]
   [-no-install] [-f file] [-o file] [-h] [--help]
 
 [file.v]: Coq file to be compiled
@@ -82,10 +66,11 @@ coq_makefile [subdirectory] .... [file.v] ... [file.ml[i4]?] ... [file.mllib]
 [VARIABLE = value]: Add the variable definition \"VARIABLE=value\"
 [-byte]: compile with byte-code version of coq
 [-opt]: compile with native-code version of coq
-[-impredicative-set]: compile with option -impredicative-set of coq
+[-arg opt]: send option \"opt\" to coqc
 [-no-install]: build a makefile with no install target
 [-f file]: take the contents of file as arguments
 [-o file]: output should go in file file
+	Output file outside the current directory is forbidden.
 [-h]: print this usage summary
 [--help]: equivalent to [-h]\n";
   exit 1
@@ -94,36 +79,14 @@ let is_genrule r =
     let genrule = Str.regexp("%") in
       Str.string_match genrule r 0
 
-let absolute_dir dir =
-  let current = Sys.getcwd () in
-    Sys.chdir dir;
-    let dir' = Sys.getcwd () in
-      Sys.chdir current;
-      dir'
+let string_prefix a b =
+  let rec aux i = try if a.[i] = b.[i] then aux (i+1) else i with |Invalid_argument _ -> i in
+    String.sub a 0 (aux 0)
 
 let is_prefix dir1 dir2 =
   let l1 = String.length dir1 in
   let l2 = String.length dir2 in
     dir1 = dir2 or (l1 < l2 & String.sub dir2 0 l1 = dir1 & dir2.[l1] = '/')
-
-let canonize f =
-  let l = String.length f in
-  if l > 2 && f.[0] = '.' && f.[1] = '/' then
-    let n = let i = ref 2 in while !i < l && f.[!i] = '/' do incr i done; !i in
-    String.sub f n (l-n)
-  else f
-
-let is_absolute_prefix dir dir' =
-  is_prefix (absolute_dir dir) (absolute_dir dir')
-
-let is_included dir = function
-  | RInclude (dir',_) -> is_absolute_prefix dir' dir
-  | Include dir' -> absolute_dir dir = absolute_dir dir'
-  | _ -> false
-
-let has_top_file = function
-  | ML s | V s | MLI s | ML4 s |MLLIB s -> s = Filename.basename s
-  | _ -> false
 
 let physical_dir_of_logical_dir ldir =
   let le = String.length ldir - 1 in
@@ -133,32 +96,42 @@ let physical_dir_of_logical_dir ldir =
   done;
   pdir
 
-let standard ()=
+let standard opt =
   print "byte:\n";
   print "\t$(MAKE) all \"OPT:=-byte\"\n\n";
   print "opt:\n";
-  if !opt = "" then print "\t@echo \"WARNING: opt is disabled\"\n";
-  print "\t$(MAKE) all \"OPT:="; print !opt; print "\"\n\n"
-
-let is_prefix_of_file dir f =
-  is_prefix dir (absolute_dir (Filename.dirname f))
+  if not opt then print "\t@echo \"WARNING: opt is disabled\"\n";
+  print "\t$(MAKE) all \"OPT:="; print (if opt then "-opt" else "-byte");
+  print "\"\n\n"
 
 let classify_files_by_root var files (inc_i,inc_r) =
   if not (List.exists (fun (pdir,_,_) -> pdir = ".") inc_r) then
     begin
+      let absdir_of_files = List.rev_map
+	(fun x -> Minilib.canonical_path_name (Filename.dirname x))
+	files in
+	(* files in scope of a -I option (assuming they are no overlapping) *)
+      let has_inc_i = List.exists (fun (_,a) -> List.mem a absdir_of_files) inc_i in
+	if has_inc_i then
+	  begin
+	    printf "%sINC=" var;
+	    List.iter (fun (pdir,absdir) ->
+			 if List.mem absdir absdir_of_files
+			 then printf
+			   "$(filter $(wildcard %s/*),$(%s)) "
+			   pdir var
+		      ) inc_i;
+	    printf "\n";
+	  end;
       (* Files in the scope of a -R option (assuming they are disjoint) *)
-      list_iter_i (fun i (pdir,ldir,abspdir) ->
-	if List.exists (is_prefix_of_file abspdir) files then
-	  printf "%s%d:=$(patsubst %s/%%,%%,$(filter %s/%%,$(%s)))\n"
-	    var i pdir pdir var)
-	inc_r;
-      (* Files not in the scope of a -R option *)
-      let pat_of_dir (pdir,_,_) = pdir^"/%" in
-      let pdir_patterns = String.concat " " (List.map pat_of_dir inc_r) in
-      printf "%s0:=$(filter-out %s,$(%s))\n" var pdir_patterns var
+	list_iter_i (fun i (pdir,ldir,abspdir) ->
+		       if List.exists (is_prefix abspdir) absdir_of_files then
+			 printf "%s%d=$(patsubst %s/%%,%%,$(filter %s/%%,$(%s)))\n"
+			   var i pdir pdir var)
+	  inc_r;
     end
 
-let install_include_by_root path_var files_var files (_,inc_r) =
+let install_include_by_root path_var files_var files (inc_i,inc_r) =
   try
     (* All files caught by a -R . option (assuming it is the only one) *)
     let ldir = match inc_r with
@@ -167,27 +140,42 @@ let install_include_by_root path_var files_var files (_,inc_r) =
 	 let () = prerr_string "Warning: install rule assumes that -R . _ is the only -R option" in
 	   out in
     let pdir = physical_dir_of_logical_dir ldir in
-    printf "\tfor i in $(%s); do \\\n" files_var;
-    printf "\t install -d `dirname $(DSTROOT)$(%s)user-contrib/%s/$$i`; \\\n\t install $$i $(DSTROOT)$(%s)user-contrib/%s/$$i; \\\n" path_var pdir path_var pdir;
-    printf "\tdone\n"
+      printf "\tfor i in $(%s); do \\\n" files_var;
+      printf "\t install -d `dirname $(DSTROOT)$(%s)user-contrib/%s/$$i`; \\\n" path_var pdir;
+      printf "\t install $$i $(DSTROOT)$(%s)user-contrib/%s/$$i; \\\n" path_var pdir;
+      printf "\tdone\n"
   with Not_found ->
-    (* Files in the scope of a -R option (assuming they are disjoint) *)
-    list_iter_i (fun i (pdir,ldir,abspdir) ->
-      if List.exists (is_prefix_of_file abspdir) files then
-	begin
-	  let pdir' = physical_dir_of_logical_dir ldir in
-	  printf "\tcd %s; for i in $(%s%d); do \\\n" pdir files_var i;
-	  printf "\t install -d `dirname $(DSTROOT)$(%s)user-contrib/%s/$$i`; \\\n\t install $$i $(DSTROOT)$(%s)user-contrib/%s/$$i; \\\n" path_var pdir' path_var pdir';
-	  printf "\tdone\n"
-	end) inc_r;
-    (* Files not in the scope of a -R option *)
-    printf "\tfor i in $(%s0); do \\\n" files_var;
-    printf "\t install -d `dirname $(DSTROOT)$(%s)user-contrib/$(INSTALLDEFAULTROOT)/$$i`; \\\n\t install $$i $(DSTROOT)$(%s)user-contrib/$(INSTALLDEFAULTROOT)/$$i; \\\n" path_var path_var;
-    printf "\tdone\n"
-
-let string_prefix a b =
-  let rec aux i = try if a.[i] = b.[i] then aux (i+1) else i with |Invalid_argument _ -> i in
-    String.sub a 0 (aux 0)
+    let absdir_of_files = List.rev_map
+      (fun x -> Minilib.canonical_path_name (Filename.dirname x))
+      files in
+    let has_inc_i_files =
+      List.exists (fun (_,a) -> List.mem a absdir_of_files) inc_i in
+    let install_inc_i d =
+      printf "\tinstall -d $(DSTROOT)$(%s)user-contrib/%s; \\\n" path_var d;
+      printf "\tfor i in $(%sINC); do \\\n" files_var;
+      printf "\t install $$i $(DSTROOT)$(%s)user-contrib/%s/`basename $$i`; \\\n" path_var d;
+      printf "\tdone\n"
+    in
+      if inc_r = [] then
+	if has_inc_i_files then
+	  begin
+	    (* Files in the scope of a -I option *)
+	    install_inc_i "$(INSTALLDEFAULTROOT)";
+	  end else ()
+      else
+	(* Files in the scope of a -R option (assuming they are disjoint) *)
+	list_iter_i (fun i (pdir,ldir,abspdir) ->
+		       let has_inc_r_files = List.exists (is_prefix abspdir) absdir_of_files in
+		       let pdir' = physical_dir_of_logical_dir ldir in
+			 if has_inc_r_files then
+			   begin
+			     printf "\tcd %s; for i in $(%s%d); do \\\n" pdir files_var i;
+			     printf "\t install -d `dirname $(DSTROOT)$(%s)user-contrib/%s/$$i`; \\\n" path_var pdir';
+			     printf "\t install $$i $(DSTROOT)$(%s)user-contrib/%s/$$i; \\\n" path_var pdir';
+			     printf "\tdone\n";
+			   end;
+			 if has_inc_i_files then install_inc_i pdir'
+		    ) inc_r
 
 let install_doc some_vfiles some_mlifiles (_,inc_r) =
   let install_one_kind kind dir =
@@ -332,17 +320,24 @@ let implicit () =
     if !some_mllibfile then mllib_rules ();
     if !some_vfile then v_rules ()
 
-let variables defs =
+let variables opt (args,defs) =
   let var_aux (v,def) = print v; print "="; print def; print "\n" in
     section "Variables definitions.";
     List.iter var_aux defs;
     print "\n";
     print "ZFLAGS=$(OCAMLLIBS) $(COQSRCLIBS) -I $(CAMLP4LIB)\n";
-    if !opt = "-byte" then
+    if not opt then
       print "override OPT:=-byte\n"
     else
       print "OPT?=\n";
-    if !impredicative_set = true then print "OTHERFLAGS=-impredicative-set\n";
+    begin
+      match args with
+	|[] -> ()
+	|h::t -> print "OTHERFLAGS=";
+	  print h;
+	  List.iter (fun s -> print " ";print s) t;
+	  print "\n";
+    end;
     (* Coq executables and relative variables *)
     print "COQFLAGS?=-q $(OPT) $(COQLIBS) $(OTHERFLAGS) $(COQ_XML)\n";
     print "COQC?=$(COQBIN)coqc\n";
@@ -354,7 +349,6 @@ let variables defs =
     print "CAMLOPTC?=$(OCAMLOPT) -c -rectypes\n";
     print "CAMLLINK?=$(OCAMLC) -rectypes\n";
     print "CAMLOPTLINK?=$(OCAMLOPT) -rectypes\n";
-
     print "GRAMMARS?=grammar.cma\n";
     print "CAMLP4EXTEND?=pa_extend.cmo pa_macro.cmo q_MLast.cmo\n";
     print "CAMLP4OPTIONS?=\n";
@@ -374,7 +368,7 @@ let include_dirs (inc_i,inc_r) =
     List.map (fun (p,l,_) ->
       let l' = if l = "" then "\"\"" else l in "-R " ^ p ^ " " ^ l')
       l in
-  let inc_i' = List.filter (fun (i,_) -> not (List.exists (fun (i',_,_) -> is_absolute_prefix i' i) inc_r)) inc_i in
+  let inc_i' = List.filter (fun (_,i) -> not (List.exists (fun (_,_,i') -> is_prefix i' i) inc_r)) inc_i in
   let str_i = parse_includes inc_i in
   let str_i' = parse_includes inc_i' in
   let str_r = parse_rec_includes inc_r in
@@ -389,12 +383,6 @@ let include_dirs (inc_i,inc_r) =
   -I $(COQLIB)plugins/"; print c) Coq_config.plugins_dirs; print "\n";
     print "COQLIBS?="; print_list "\\\n  " str_i'; print " "; print_list "\\\n  " str_r; print "\n";
     print "COQDOCLIBS?=";   print_list "\\\n  " str_r; print "\n\n"
-
-
-let rec special = function
-  | [] -> []
-  | Special (file,deps,com) :: r -> (file,deps,com) :: (special r)
-  | _ :: r -> special r
 
 let custom sps =
   let pr_path (file,dependencies,com) =
@@ -416,29 +404,6 @@ let subdirs sds =
       ("NOARG" :: "all" ::  "opt" :: "byte" :: "archclean" :: "clean" :: "install"
 	:: "depend" :: "html" :: sds);
     print "\n\n"
-
-let rec split_arguments = function
-  | V n :: r ->
-      let (v,m,o,s),i,d = split_arguments r in ((canonize n::v,m,o,s),i,d)
-  | ML n :: r ->
-      let (v,(mli,ml4,ml,mllib),o,s),i,d = split_arguments r in ((v,(mli,ml4,canonize n::ml,mllib),o,s),i,d)
-  | MLI n :: r ->
-      let (v,(mli,ml4,ml,mllib),o,s),i,d = split_arguments r in ((v,(canonize n::mli,ml4,ml,mllib),o,s),i,d)
-  | ML4 n :: r ->
-      let (v,(mli,ml4,ml,mllib),o,s),i,d = split_arguments r in ((v,(mli,canonize n::ml4,ml,mllib),o,s),i,d)
-  | MLLIB n :: r ->
-      let (v,(mli,ml4,ml,mllib),o,s),i,d = split_arguments r in ((v,(mli,ml4,ml,canonize n::mllib),o,s),i,d)
-  | Special (n,dep,c) :: r ->
-      let (v,m,o,s),i,d = split_arguments r in ((v,m,(n,dep,c)::o,s),i,d)
-  | Subdir n :: r ->
-      let (v,m,o,s),i,d = split_arguments r in ((v,m,o,n::s),i,d)
-  | Include p :: r ->
-      let t,(i,r),d = split_arguments r in (t,((p,absolute_dir p)::i,r),d)
-  | RInclude (p,l) :: r ->
-      let t,(i,r),d = split_arguments r in (t,(i,(p,l,absolute_dir p)::r),d)
-  | Def (v,def) :: r ->
-      let t,i,d = split_arguments r in (t,i,(v,def)::d)
-  | [] -> ([],([],[],[],[]),[],[]),([],[]),[]
 
 let main_targets vfiles (mlifiles,ml4files,mlfiles,mllibfiles) other_targets inc =
   begin match vfiles with
@@ -554,87 +519,6 @@ let all_target (vfiles, mlfiles, sps, sds) inc =
   custom sps;
   subdirs sds
 
-let parse f =
-  let rec string = parser
-    | [< '' ' | '\n' | '\t' >] -> ""
-    | [< 'c; s >] -> (String.make 1 c)^(string s)
-    | [< >] -> ""
-  and string2 = parser
-    | [< ''"' >] -> ""
-    | [< 'c; s >] -> (String.make 1 c)^(string2 s)
-  and skip_comment = parser
-    | [< ''\n'; s >] -> s
-    | [< 'c; s >] -> skip_comment s
-    | [< >] -> [< >]
-  and args = parser
-    | [< '' ' | '\n' | '\t'; s >] -> args s
-    | [< ''#'; s >] -> args (skip_comment s)
-    | [< ''"'; str = string2; s >] -> ("" ^ str) :: args s
-    | [< 'c; str = string; s >] -> ((String.make 1 c) ^ str) :: (args s)
-    | [< >] -> []
-  in
-  let c = open_in f in
-  let res = args (Stream.of_channel c) in
-    close_in c;
-    res
-
-let rec process_cmd_line = function
-  | [] -> []
-  | ("-h"|"--help") :: _ ->
-      usage ()
-  | ("-no-opt"|"-byte") :: r ->
-      opt := "-byte"; process_cmd_line r
-  | ("-full"|"-opt") :: r ->
-      opt := "-opt"; process_cmd_line r
-  | "-impredicative-set" :: r ->
-      impredicative_set := true; process_cmd_line r
-  | "-no-install" :: r ->
-      no_install := true; process_cmd_line r
-  | "-custom" :: com :: dependencies :: file :: r ->
-      let check_dep f =
-	if Filename.check_suffix f ".v" then
-          some_vfile := true
-	else if (Filename.check_suffix f ".ml") || (Filename.check_suffix f ".ml4") then
-          some_mlfile := true
-      in
-	List.iter check_dep (Str.split (Str.regexp "[ \t]+") dependencies);
-	Special (file,dependencies,com) :: (process_cmd_line r)
-  | "-I" :: d :: r ->
-      Include d :: (process_cmd_line r)
-  | "-R" :: p :: l :: r ->
-      RInclude (p,l) :: (process_cmd_line r)
-  | ("-I"|"-custom") :: _ ->
-      usage ()
-  | "-f" :: file :: r ->
-      make_name := file;
-      process_cmd_line ((parse file)@r)
-  | ["-f"] ->
-      usage ()
-  | "-o" :: file :: r ->
-      makefile_name := file;
-      output_channel := (open_out file);
-      (process_cmd_line r)
-  | v :: "=" :: def :: r ->
-      Def (v,def) :: (process_cmd_line r)
-  | f :: r ->
-    if Filename.check_suffix f ".v" then begin
-      some_vfile := true;
-      V f :: (process_cmd_line r)
-    end else if (Filename.check_suffix f ".ml") then begin
-      some_mlfile := true;
-      ML f :: (process_cmd_line r)
-    end else if (Filename.check_suffix f ".ml4") then begin
-      some_ml4file := true;
-      ML4 f :: (process_cmd_line r)
-    end else if (Filename.check_suffix f ".mli") then begin
-      some_mlifile := true;
-      MLI f :: (process_cmd_line r)
-    end else if (Filename.check_suffix f ".mllib") then begin
-      some_mllibfile := true;
-      MLLIB f :: (process_cmd_line r)
-    end else
-          Subdir f :: (process_cmd_line r)
-
 let banner () =
   print (Printf.sprintf
 "#############################################################################
@@ -660,36 +544,21 @@ let command_line args =
   print_list args;
   print "\n#\n\n"
 
-let directories_deps l =
-  let print_dep f dep =
-    if dep <> [] then begin print f; print ": "; print_list dep; print "\n" end
-  in
-  let rec iter ((dirs,before) as acc) = function
-    | [] ->
-	()
-    | (Subdir d) :: l ->
-	print_dep d before; iter (d :: dirs, d :: before) l
-    | (ML f) :: l | (V f) :: l | (MLI f) :: l | (ML4 f) :: l | (MLLIB f) :: l ->
-	print_dep f dirs; iter (dirs, f :: before) l
-    | (Special (f,_,_)) :: l ->
-	print_dep f dirs; iter (dirs, f :: before) l
-    | _ :: l ->
-	iter acc l
-  in
-    iter ([],[]) l
-
-let ensure_root_dir l =
-  if List.exists (is_included ".") l or not (List.exists has_top_file l) then
+let ensure_root_dir (v,(mli,ml4,ml,mllib),_,_) ((i_inc,r_inc) as l) =
+  let here = Sys.getcwd () in
+  let not_tops =List.for_all (fun s -> s <> Filename.basename s) in
+  if List.exists (fun (_,x) -> x = here) i_inc
+    or List.exists (fun (_,_,x) -> is_prefix x here) r_inc
+    or (not_tops v && not_tops mli && not_tops ml4 && not_tops ml && not_tops mllib) then
     l
   else
-    Include "." :: l
+    ((".",here)::i_inc,r_inc)
 
 let warn_install_at_root_directory (vfiles,(mlifiles,ml4files,mlfiles,mllibfiles),_,_) (inc_i,inc_r) =
   let inc_r_top = List.filter (fun (_,ldir,_) -> ldir = "") inc_r in
-  let inc_top = List.map (fun (p,_,_) -> p) inc_r_top @ List.map fst inc_i in
+  let inc_top = List.map (fun (p,_,_) -> p) inc_r_top in
   let files = vfiles @ mlifiles @ ml4files @ mlfiles @ mllibfiles in
-  if not !no_install &&
-    List.exists (fun f -> List.mem (Filename.dirname f) inc_top) files
+  if inc_r = [] || List.exists (fun f -> List.mem (Filename.dirname f) inc_top) files
   then
     Printf.eprintf "Warning: install target will copy files at the first level of the coq contributions installation directory; option -R %sis recommended\n"
       (if inc_r_top = [] then "" else "with non trivial logical root ")
@@ -707,10 +576,33 @@ let check_overlapping_include (_,inc_r) =
   in aux inc_r
 
 let do_makefile args =
-  let l = process_cmd_line args in
-  let l = ensure_root_dir l in
-  let (_,_,sps,sds as targets), inc, defs = split_arguments l in
-  warn_install_at_root_directory targets inc;
+  let has_file var = function
+    |[] -> var := false
+    |_::_ -> var := true in
+  let (project_file,makefile,is_install,opt),l =
+    try Project_file.process_cmd_line Filename.current_dir_name (None,None,true,true) [] args
+    with Project_file.Parsing_error -> usage () in
+  let (v_f,(mli_f,ml4_f,ml_f,mllib_f),sps,sds as targets), inc, defs =
+    Project_file.split_arguments l in
+
+  let () = match project_file with |None -> () |Some f -> make_name := f in
+  let () = match makefile with
+    |None -> ()
+    |Some f -> makefile_name := f; output_channel := open_out f in
+  has_file some_vfile v_f; has_file some_mlifile mli_f; has_file some_mlfile ml_f;
+  has_file some_ml4file ml4_f; has_file some_mllibfile mllib_f;
+  let check_dep f =
+    if Filename.check_suffix f ".v" then some_vfile := true
+    else if (Filename.check_suffix f ".mli") then some_mlifile := true
+    else if (Filename.check_suffix f ".ml4") then some_ml4file := true
+    else if (Filename.check_suffix f ".ml") then some_mlfile := true
+    else if (Filename.check_suffix f ".mllib") then some_mllibfile := true
+  in
+  List.iter (fun (_,dependencies,_) ->
+    List.iter check_dep (Str.split (Str.regexp "[ \t]+") dependencies)) sps;
+
+  let inc = ensure_root_dir targets inc in
+  if is_install then warn_install_at_root_directory targets inc;
   check_overlapping_include inc;
   banner ();
   header_includes ();
@@ -718,17 +610,16 @@ let do_makefile args =
   command_line args;
   parameters ();
   include_dirs inc;
-  variables defs;
+  variables opt defs;
   all_target targets inc;
   implicit ();
-  standard ();
-  if not !no_install then install targets inc;
+  standard opt;
+  if is_install then install targets inc;
   clean sds sps;
   make_makefile sds;
-  (* TEST directories_deps l; *)
   footer_includes ();
   warning ();
-  if not (!output_channel == stdout) then close_out !output_channel;
+  if not (makefile = None) then close_out !output_channel;
   exit 0
 
 let main () =

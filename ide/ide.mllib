@@ -13,6 +13,7 @@ Typed_notebook
 Config_lexer
 Utf8_convert
 Preferences
+Project_file
 Ideutils
 Ideproof
 Coq_lex

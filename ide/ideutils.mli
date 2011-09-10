@@ -30,9 +30,6 @@ val is_char_start : char -> bool
 val lib_ide_file : string -> string
 val my_stat : string -> Unix.stats option
 
-(** safe version of Pervasives.prerr_endline
-    (avoid exception in win32 without console) *)
-val safe_prerr_endline : string -> unit
 (** debug printing *)
 val prerr_endline : string -> unit
 
@@ -66,13 +63,6 @@ val flash_info : ?delay:int -> string -> unit
 val set_location : (string -> unit) ref
 
 val pbar : GRange.progress_bar
-
-
-(*
-  checks if two file names refer to the same (existing) file
-*)
-
-val same_file : string -> string -> bool
 
 (*
   returns an absolute filename equivalent to given filename

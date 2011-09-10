@@ -31,15 +31,6 @@ let pbar = GRange.progress_bar ~pulse_step:0.2 ()
 
 let debug = Flags.debug
 
-(* On a Win32 application with no console, writing to stderr raise
-   a Sys_error "bad file descriptor", hence the "try" below.
-   Ideally, we should re-route message to a log file somewhere, or
-   print in the response buffer.
-*)
-
-let safe_prerr_endline s =
-  try prerr_endline s;flush stderr with _ -> ()
-
 let prerr_endline s =
   if !debug then try prerr_endline s;flush stderr with _ -> ()
 
@@ -324,11 +315,11 @@ let url_for_keyword =
 	let u = String.sub s (i + 1) (String.length s - i - 1) in
 	Hashtbl.add ht k u
       with _ ->
-	safe_prerr_endline "Warning: Cannot parse documentation index file."
+	Minilib.safe_prerr_endline "Warning: Cannot parse documentation index file."
     done with End_of_file ->
       close_in cin
   with _ ->
-    safe_prerr_endline "Warning: Cannot find documentation index file."
+    Minilib.safe_prerr_endline "Warning: Cannot find documentation index file."
   end;
   Hashtbl.find ht : string -> string)
 
@@ -337,32 +328,4 @@ let browse_keyword f text =
   try let u = Lazy.force url_for_keyword text in browse f (doc_url() ^ u)
   with Not_found -> f ("No documentation found for \""^text^"\".\n")
 
-
-(*
-  checks if two file names refer to the same (existing) file by
-  comparing their device and inode.
-  It seems that under Windows, inode is always 0, so we cannot
-  accurately check if
-
-*)
-(* Optimised for partial application (in case many candidates must be
-   compared to f1). *)
-let same_file f1 =
-  try
-    let s1 = Unix.stat f1 in
-    (fun f2 ->
-      try
-        let s2 = Unix.stat f2 in
-        s1.Unix.st_dev = s2.Unix.st_dev &&
-          if Sys.os_type = "Win32" then f1 = f2
-          else s1.Unix.st_ino = s2.Unix.st_ino
-      with
-          Unix.Unix_error _ -> false)
-  with
-      Unix.Unix_error _ -> (fun _ -> false)
-
-let absolute_filename f =
-  if Filename.is_relative f then
-    Filename.concat (Sys.getcwd ()) f
-  else f
-
+let absolute_filename f = Minilib.correct_path f (Sys.getcwd ())

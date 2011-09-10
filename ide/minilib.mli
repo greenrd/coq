@@ -25,3 +25,17 @@ val home : string
 
 val coqlib : string ref
 val coqtop_path : string ref
+
+(** safe version of Pervasives.prerr_endline
+    (avoid exception in win32 without console) *)
+val safe_prerr_endline : string -> unit
+
+val remove_path_dot : string -> string
+val strip_path : string -> string
+val canonical_path_name : string -> string
+(** correct_path f dir = dir/f if f is relative *)
+val correct_path : string -> string -> string
+
+(** checks if two file names refer to the same (existing) file *)
+val same_file : string -> string -> bool
+

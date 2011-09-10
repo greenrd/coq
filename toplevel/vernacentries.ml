@@ -594,10 +594,10 @@ let vernac_end_section (loc,_) =
 let vernac_end_segment (_,id as lid) =
   check_no_pending_proofs ();
   match Lib.find_opening_node id with
-  | Lib.OpenedModule (export,_,_) -> vernac_end_module export lid
-  | Lib.OpenedModtype _ -> vernac_end_modtype lid
+  | Lib.OpenedModule (false,export,_,_) -> vernac_end_module export lid
+  | Lib.OpenedModule (true,_,_,_) -> vernac_end_modtype lid
   | Lib.OpenedSection _ -> vernac_end_section lid
-  | _ -> anomaly "No more opened things"
+  | _ -> assert false
 
 (* Libraries *)
 
@@ -986,13 +986,16 @@ let _ =
       optread  = (fun _ -> not (Vm.transp_values ()));
       optwrite = (fun b -> Vm.set_transp_values (not b)) }
 
+(* No more undo limit in the new proof engine.
+   The command still exists for compatibility (e.g. with ProofGeneral) *)
+
 let _ =
   declare_int_option
     { optsync  = false;
-      optname  = "the undo limit";
+      optname  = "the undo limit (OBSOLETE)";
       optkey   = ["Undo"];
-      optread  = Pfedit.get_undo;
-      optwrite = Pfedit.set_undo }
+      optread  = (fun _ -> None);
+      optwrite = (fun _ -> ()) }
 
 let _ =
   declare_int_option

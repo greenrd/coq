@@ -66,7 +66,7 @@ END
 
 let () =
   let argl = Array.to_list Sys.argv in
-  let argl = Coqide.set_coqtop_path argl in
+  let argl = Coqide.read_coqide_args argl in
   let files = Coqide.process_argv argl in
   let args = List.filter (fun x -> not (List.mem x files)) (List.tl argl) in
   Coq.check_connection args;
@@ -98,7 +98,7 @@ let () =
       with
 	| Sys.Break -> Ideutils.prerr_endline "Interrupted."
 	| e ->
-	    Ideutils.safe_prerr_endline
+	    Minilib.safe_prerr_endline
 	      ("CoqIde unexpected error:" ^ (Printexc.to_string e));
 	    Coqide.crash_save 127
     done

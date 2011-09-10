@@ -1096,7 +1096,7 @@ let replace_args_with_metas t = match kind_of_term t with
   | App(c,al) ->
     let ms = Array.map (fun _ -> Evarutil.new_meta ()) al in
     (ms,mkApp(c,Array.map mkMeta ms))
-  | _ -> raise (Invalid_argument "Application required")
+  | _ -> invalid_arg "Application required"
 
 let find_open depth c =
   let frels = Intset.elements (free_rels c) in
@@ -1141,27 +1141,29 @@ let abstract_follow_deps env evd c l lname_type =
           (match kind_of_term t2 with
             | App (c,al) ->
               let ty = type_of ctx c in
-              (match fst (splay_prod_n env evd (i + 1) ty) with
-                | ((_,_,ft) :: ps) ->
-                  (match kind_of_term ft with
-                    | App (_,fa) ->
-                      let at = type_of ctx t in
-                      let oata = open_args nb ft at in
-                      let outer_args oas ia =
-                        if oas = [] then []
-                        else
-                          let lps = List.length ps in
-                          let ca = find_closed lps ia in
-                          list_cartesian (fun cl oa -> (lps-cl,oa)) ca oas
-                      in
-                      (match List.flatten (Array.to_list (array_map2 outer_args oata fa)) with
-                        | [] -> subst z
-                        | pairs ->
-                          let oa = array_bag_build (Array.length al) pairs in
-                          let al = array_map2 (List.fold_left (fun a o -> substStart o a (lift nb (List.nth l' (o - nb - 1))))) al oa
-                          in follow (st, ctx, mkApp (c,al)))
-                    | _ -> subst z)
-                | _ -> assert false)
+              (try
+                match fst (splay_prod_n env evd (i + 1) ty) with
+                  | ((_,_,ft) :: ps) ->
+                    (match kind_of_term ft with
+                      | App (_,fa) ->
+                        let at = type_of ctx t in
+                        let oata = open_args nb ft at in
+                        let outer_args oas ia =
+                          if oas = [] then []
+                          else
+                            let lps = List.length ps in
+                            let ca = find_closed lps ia in
+                            list_cartesian (fun cl oa -> (lps-cl,oa)) ca oas
+                        in
+                        (match List.flatten (Array.to_list (array_map2 outer_args oata fa)) with
+                          | [] -> subst z
+                          | pairs ->
+                            let oa = array_bag_build (Array.length al) pairs in
+                            let al = array_map2 (List.fold_left (fun a o -> substStart o a (lift nb (List.nth l' (o - nb - 1))))) al oa
+                            in follow (st, ctx, mkApp (c,al)))
+                      | _ -> subst z)
+                  | _ -> assert false
+              with Invalid_argument _ -> subst z)
             | _ -> assert false)
         | _ -> assert false)
     | z -> subst z

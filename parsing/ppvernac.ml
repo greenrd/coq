@@ -260,7 +260,7 @@ let pr_module_vardecls pr_c (export,idl,(mty,inl)) =
   let lib_dir = Lib.library_dp() in
   List.iter (fun (_,id) ->
     Declaremods.process_module_bindings [id]
-      [make_mbid lib_dir (string_of_id id),
+      [make_mbid lib_dir id,
        (Modintern.interp_modtype (Global.env()) mty, inl)]) idl;
   (* Builds the stream *)
   spc() ++
@@ -466,8 +466,12 @@ let rec pr_vernac = function
       str "Backtrack" ++  spc() ++ prlist_with_sep sep int [i;j;k]
   | VernacFocus i -> str"Focus" ++ pr_opt int i
   | VernacShow s ->
+      let pr_goal_reference = function
+        | OpenSubgoals -> mt ()
+        | NthGoal n -> spc () ++ int n
+        | GoalId n -> spc () ++ str n in
       let pr_showable = function
-	| ShowGoal n -> str"Show" ++ pr_opt int n
+	| ShowGoal n -> str"Show" ++ pr_goal_reference n
 	| ShowGoalImplicitly n -> str"Show Implicit Arguments" ++ pr_opt int n
 	| ShowProof -> str"Show Proof"
 	| ShowNode -> str"Show Node"

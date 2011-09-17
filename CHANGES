@@ -44,6 +44,8 @@ Tactics
 - Tactic autorewrite does no longer instantiate pre-existing
   existential variables (theoretical source of possible incompatibility).
 - Tactic "dependent rewrite" now supports equality in "sig".
+- Tactic omega now understands Zpred (wish #1912) and can prove any goal
+  from a context containing an arithmetical contradiction (wish #2236).
 
 Vernacular commands
 
@@ -63,6 +65,8 @@ Vernacular commands
 - A new option "Set Default Timeout n / Unset Default Timeout".
 - Qed now uses information from the reduction tactics used in proof script
   to avoid conversion at Qed time to go into a very long computation.
+- New command "Show Goal ident" to display the statement of a goal, even
+  a closed one (available from Proof General).
 
 Module System
 

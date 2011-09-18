@@ -1146,10 +1146,7 @@ let abstract_follow_deps env evd c l lname_type =
                   | ((_,_,ft) :: ps) ->
                     (match kind_of_term ft with
                       | App (_,fa) ->
-                        let at =
-													try type_of env ctx t
-													with Not_found -> bogus
-													in
+                        let at = type_of env ctx t in
                         let oata = open_args env nb ft at in
                         let outer_args oas ia =
                           if oas = [] then []

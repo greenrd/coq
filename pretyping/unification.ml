@@ -1118,36 +1118,39 @@ let bogus = mkRel 0
 
 let abstract_follow_deps env evd c l lname_type =
   let l' = List.rev l in
-  let env' = push_rel_context lname_type env in
-  let type_of ctx c = get_type_of (context_to_env ctx env') evd c in
-  let open_args nb ft at =
+  let env = push_rel_context lname_type env in
+  let type_of env ctx c = get_type_of (context_to_env ctx env) evd c in
+  let open_args env nb ft at =
     let (ms,mft) = replace_args_with_metas ft in
     let cv_pb = CONV in
     let flags = default_unify_flags in
     let evd = Array.fold_left (fun e m -> meta_declare m bogus e) evd ms in
-    let evd = w_unify_0 env' cv_pb flags mft at evd in
+    let evd = w_unify_0 env cv_pb flags mft at evd in
     Array.map (fun m -> find_open nb (meta_value evd m)) ms
   in
-  let rec subst = function
+  let rec subst env = function
     | ((r,nb,q as st), ctx, t as z) ->
       if eq_constr t q then
-        follow (st, ctx, mkRel r)
+        follow env (st, ctx, mkRel r)
       else match dfs_step true z with
         | Inl c -> c
-        | Inr z -> subst z
-  and follow = function
+        | Inr z -> subst env z
+  and follow env = function
     | ((r,nb,q), App1 (_,(i,_)) :: ctx, t as z) -> (match up z with
         | Some (st, ctx, t2) ->
           (match kind_of_term t2 with
             | App (c,al) ->
-              let ty = type_of ctx c in
+              let ty = type_of env ctx c in
               (try
                 match fst (splay_prod_n env evd (i + 1) ty) with
                   | ((_,_,ft) :: ps) ->
                     (match kind_of_term ft with
                       | App (_,fa) ->
-                        let at = type_of ctx t in
-                        let oata = open_args nb ft at in
+                        let at =
+													try type_of env ctx t
+													with Not_found -> bogus
+													in
+                        let oata = open_args env nb ft at in
                         let outer_args oas ia =
                           if oas = [] then []
                           else
@@ -1156,19 +1159,20 @@ let abstract_follow_deps env evd c l lname_type =
                             list_cartesian (fun cl oa -> (lps-cl,oa)) ca oas
                         in
                         (match List.flatten (Array.to_list (array_map2 outer_args oata fa)) with
-                          | [] -> subst z
+                          | [] -> subst env z
                           | pairs ->
                             let oa = array_bag_build (Array.length al) pairs in
-                            let al = array_map2 (List.fold_left (fun a o -> substStart o a (lift nb (List.nth l' (o - nb - 1))))) al oa
-                            in follow (st, ctx, mkApp (c,al)))
-                      | _ -> subst z)
+                            let env' = context_to_env ctx env in
+                            let al = array_map2 (List.fold_left (fun a o -> substStart env' o a (lift nb (List.nth l' (o - nb - 1))))) al oa
+                            in follow env (st, ctx, mkApp (c,al)))
+                      | _ -> subst env z)
                   | _ -> assert false
-              with Invalid_argument _ -> subst z)
+              with Invalid_argument _ -> subst env z)
             | _ -> assert false)
         | _ -> assert false)
-    | z -> subst z
-  and substStart r a o = subst ((r, 0, o), [], a)
-  in List.fold_left (fun c -> function | (na,_,ta) -> mkLambda_name env (na,ta,c)) (substStart 1 c (List.hd l')) lname_type
+    | z -> subst env z
+  and substStart env r a o = subst env ((r, 0, o), [], a)
+  in List.fold_left (fun c -> function | (na,_,ta) -> mkLambda_name env (na,ta,c)) (substStart env 1 c (List.hd l')) lname_type
 
 (* if lname_typ is [xn,An;..;x1,A1] and l is a list of terms,
    gives [x1:A1]..[xn:An]c' such that c converts to ([x1:A1]..[xn:An]c' l) *)

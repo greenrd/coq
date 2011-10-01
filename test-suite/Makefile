@@ -97,9 +97,6 @@ clean:
 	  -name '*.stamp' -o -name '*.vo' -o -name '*.log' \
 	\) -print0 | xargs -0 rm -f
 
-distclean: clean
-	$(HIDE)find . -name '*.log' -print0 | xargs -0 rm -f
-
 #######################################################################
 # Per-subsystem targets
 #######################################################################
@@ -434,7 +431,7 @@ ide : $(patsubst %.fake,%.fake.log,$(wildcard ide/*.fake))
 	@echo "TEST      $<"
 	$(HIDE){ \
 	  echo $(call log_intro,$<); \
-	  $(BIN)fake_ide $(BIN)coqtop < $< 2>&1; \
+	  $(BIN)fake_ide "$(BIN)coqtop -boot" < $< 2>&1; \
 	  if [ $$? = 0 ]; then \
 	    echo $(log_success); \
 	    echo "    $<...Ok"; \

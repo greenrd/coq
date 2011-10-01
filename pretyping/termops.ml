@@ -633,10 +633,8 @@ let my_prefix_application eq_fun (k,c) (by_c : constr) (t : constr) =
 	  None
     | _ -> None
 
-(* Recognizing occurrences of a given (closed) subterm in a term for Pattern :
-   [subst_term c t] substitutes [(Rel 1)] for all occurrences of (closed)
-   term [c] in a term [t] *)
-(*i Bizarre : si on cherche un sous terme clos, pourquoi le lifter ? i*)
+(* Recognizing occurrences of a given subterm in a term: [subst_term c t]
+   substitutes [(Rel 1)] for all occurrences of term [c] in a term [t] *)
 
 let subst_term_gen eq_fun c t =
   let rec substrec (k,c as kc) t =
@@ -649,8 +647,8 @@ let subst_term_gen eq_fun c t =
   in
   substrec (1,c) t
 
-(* Recognizing occurrences of a given (closed) subterm in a term :
-   [replace_term c1 c2 t] substitutes [c2] for all occurrences of (closed)
+(* Recognizing occurrences of a given subterm in a term :
+   [replace_term c1 c2 t] substitutes [c2] for all occurrences of
    term [c1] in a term [t] *)
 (*i Meme remarque : a priori [c] n'est pas forcement clos i*)
 
@@ -674,6 +672,11 @@ let replace_term = replace_term_gen eq_constr
    occurrence except the ones in l and b=false, means all occurrences
    except the ones in l *)
 
+type hyp_location_flag = (* To distinguish body and type of local defs *)
+  | InHyp
+  | InHypTypeOnly
+  | InHypValueOnly
+
 type occurrences = bool * int list
 let all_occurrences = (false,[])
 let no_occurrences_in_set = (true,[])
@@ -684,57 +687,127 @@ let error_invalid_occurrence l =
     (str ("Invalid occurrence " ^ plural (List.length l) "number" ^": ") ++
      prlist_with_sep spc int l ++ str ".")
 
-let subst_term_occ_gen (nowhere_except_in,locs) occ c t =
+let pr_position (cl,pos) =
+  let clpos = match cl with
+    | None -> str " of the goal"
+    | Some (id,InHyp) -> str " of hypothesis " ++ pr_id id
+    | Some (id,InHypTypeOnly) -> str " of the type of hypothesis " ++ pr_id id
+    | Some (id,InHypValueOnly) -> str " of the body of hypothesis " ++ pr_id id in
+  int pos ++ clpos
+
+let error_cannot_unify_occurrences nested (cl2,pos2,t2) (cl1,pos1,t1) (nowhere_except_in,locs) =
+  let s = if nested then "Found nested occurrences of the pattern"
+    else "Found incompatible occurrences of the pattern" in
+  errorlabstrm ""
+    (str s ++ str ":" ++
+     spc () ++ str "Matched term " ++ quote (print_constr t2) ++
+     strbrk " at position " ++ pr_position (cl2,pos2) ++ 
+     strbrk " is not compatible with matched term " ++
+     quote (print_constr t1) ++ strbrk " at position " ++ 
+     pr_position (cl1,pos1) ++ str ".")
+
+let is_selected pos (nowhere_except_in,locs) =
+  nowhere_except_in && List.mem pos locs ||
+  not nowhere_except_in && not (List.mem pos locs)
+
+exception NotUnifiable
+
+type 'a testing_function = {
+  match_fun : constr -> 'a;
+  merge_fun : 'a -> 'a -> 'a;
+  mutable testing_state : 'a;
+  mutable last_found : ((identifier * hyp_location_flag) option * int * constr) option
+}
+
+let subst_closed_term_occ_gen_modulo (nowhere_except_in,locs as plocs) test cl occ t =
   let maxocc = List.fold_right max locs 0 in
   let pos = ref occ in
-  assert (List.for_all (fun x -> x >= 0) locs);
-  let rec substrec (k,c as kc) t =
-    if nowhere_except_in & !pos > maxocc then t
-    else
-    if eq_constr c t then
-      let r =
-	if nowhere_except_in then
-	  if List.mem !pos locs then (mkRel k) else t
-	else
-	  if List.mem !pos locs then t else (mkRel k)
-      in incr pos; r
-    else
-      map_constr_with_binders_left_to_right
-	(fun d (k,c) -> (k+1,lift 1 c))
-        substrec kc t
+  let nested = ref false in
+  let add_subst t subst =
+    try
+      test.testing_state <- test.merge_fun subst test.testing_state;
+      test.last_found <- Some (cl,!pos,t)
+    with NotUnifiable ->
+      let lastpos = Option.get test.last_found in
+      error_cannot_unify_occurrences !nested (cl,!pos,t) lastpos plocs in
+  let rec substrec k t =
+    if nowhere_except_in & !pos > maxocc then t else
+    try
+      let subst = test.match_fun t in
+      if is_selected !pos plocs then
+        (add_subst t subst; incr pos;
+         (* Check nested matching subterms *)
+         nested := true; ignore (subst_below k t); nested := false;
+         (* Do the effective substitution *)
+         mkRel k)
+      else
+        (incr pos; subst_below k t)
+    with NotUnifiable ->
+      subst_below k t
+  and subst_below k t =
+    map_constr_with_binders_left_to_right (fun d k -> k+1) substrec k t
   in
-  let t' = substrec (1,c) t in
+  let t' = substrec 1 t in
   (!pos, t')
 
-let subst_term_occ (nowhere_except_in,locs as plocs) c t =
-  if locs = [] then if nowhere_except_in then t else subst_term c t
-  else
-    let (nbocc,t') = subst_term_occ_gen plocs 1 c t in
-    let rest = List.filter (fun o -> o >= nbocc) locs in
-    if rest <> [] then error_invalid_occurrence rest;
-    t'
+let is_nowhere (nowhere_except_in,locs) = nowhere_except_in && locs = [] 
 
-type hyp_location_flag = (* To distinguish body and type of local defs *)
-  | InHyp
-  | InHypTypeOnly
-  | InHypValueOnly
+let check_used_occurrences nbocc (nowhere_except_in,locs) =
+  let rest = List.filter (fun o -> o >= nbocc) locs in
+  if rest <> [] then error_invalid_occurrence rest
 
-let subst_term_occ_decl ((nowhere_except_in,locs as plocs),hloc) c (id,bodyopt,typ as d) =
-  match bodyopt,hloc with
-  | None, InHypValueOnly -> errorlabstrm "" (pr_id id ++ str " has no value")
-  | None, _ -> (id,None,subst_term_occ plocs c typ)
-  | Some body, InHypTypeOnly -> (id,Some body,subst_term_occ plocs c typ)
-  | Some body, InHypValueOnly -> (id,Some (subst_term_occ plocs c body),typ)
+let proceed_with_occurrences f plocs x =
+  if is_nowhere plocs then (* optimization *) x else
+  begin
+    assert (List.for_all (fun x -> x >= 0) (snd plocs));
+    let (nbocc,x) = f 1 x in
+    check_used_occurrences nbocc plocs;
+    x
+  end
+
+let make_eq_test c = {
+  match_fun = (fun c' -> if eq_constr c c' then () else raise NotUnifiable);
+  merge_fun = (fun () () -> ());
+  testing_state = ();
+  last_found = None
+} 
+
+let subst_closed_term_occ_gen plocs pos c t =
+  subst_closed_term_occ_gen_modulo plocs (make_eq_test c) None pos t
+
+let subst_closed_term_occ plocs c t =
+  proceed_with_occurrences (fun occ -> subst_closed_term_occ_gen plocs occ c)
+    plocs t
+
+let subst_closed_term_occ_modulo plocs test cl t =
+  proceed_with_occurrences
+    (subst_closed_term_occ_gen_modulo plocs test cl) plocs t
+
+let map_named_declaration_with_hyploc f hyploc acc (id,bodyopt,typ) =
+  let f = f (Some (id,hyploc)) in
+  match bodyopt,hyploc with
+  | None, InHypValueOnly ->
+      errorlabstrm "" (pr_id id ++ str " has no value.")
+  | None, _ | Some _, InHypTypeOnly ->
+      let acc,typ = f acc typ in acc,(id,bodyopt,typ)
+  | Some body, InHypValueOnly ->
+      let acc,body = f acc body in acc,(id,Some body,typ)
   | Some body, InHyp ->
-	if locs = [] then
-	  if nowhere_except_in then d
-	  else (id,Some (subst_term c body),subst_term c typ)
-	else
-	  let (nbocc,body') = subst_term_occ_gen plocs 1 c body in
-	  let (nbocc',t') = subst_term_occ_gen plocs nbocc c typ in
-	  let rest = List.filter (fun o -> o >= nbocc') locs in
-	  if rest <> [] then error_invalid_occurrence rest;
-	  (id,Some body',t')
+      let acc,body = f acc body in
+      let acc,typ = f acc typ in
+      acc,(id,Some body,typ)
+
+let subst_closed_term_occ_decl (plocs,hyploc) c d =
+  proceed_with_occurrences
+    (map_named_declaration_with_hyploc
+       (fun _ occ -> subst_closed_term_occ_gen plocs occ c) hyploc) plocs d
+
+let subst_closed_term_occ_decl_modulo (plocs,hyploc) test d =
+  proceed_with_occurrences
+    (map_named_declaration_with_hyploc
+       (subst_closed_term_occ_gen_modulo plocs test)
+       hyploc)
+    plocs d
 
 let vars_of_env env =
   let s =

@@ -47,6 +47,7 @@ open Pretyping.Default
 open Extrawit
 open Pcoq
 open Compat
+open Evd
 
 let safe_msgnl s =
     try msgnl s with e ->
@@ -1225,59 +1226,6 @@ let interp_fresh_id ist env l =
 
 let pf_interp_fresh_id ist gl = interp_fresh_id ist (pf_env gl)
 
-let implicit_tactic = ref None
-
-let declare_implicit_tactic tac = implicit_tactic := Some tac
-
-open Evd
-
-let solvable_by_tactic env evi (ev,args) src =
-  match (!implicit_tactic, src) with
-  | Some tac, (ImplicitArg _ | QuestionMark _)
-      when
-	Sign.named_context_equal (Environ.named_context_of_val evi.evar_hyps)
-	(Environ.named_context env) ->
-      let id = id_of_string "H" in
-      start_proof id (Local,Proof Lemma) evi.evar_hyps evi.evar_concl
-	(fun _ _ -> ());
-      begin
-	try
-	  by (tclCOMPLETE tac);
-	  let _,(const,_,_,_) = cook_proof ignore in
-	  delete_current_proof (); const.const_entry_body
-	with e when Logic.catchable_exception e ->
-	  delete_current_proof();
-	  raise Exit
-      end
-  | _ -> raise Exit
-
-let solve_remaining_evars fail_evar use_classes env initial_sigma evd c =
-  let evdref =
-    if use_classes then 
-      ref (Typeclasses.resolve_typeclasses ~split:true ~fail:fail_evar env evd)
-    else ref evd in
-  let rec proc_rec c =
-    let c = Reductionops.whd_evar !evdref c in
-    match kind_of_term c with
-      | Evar (evk,args as ev) when not (Evd.mem initial_sigma evk) ->
-            let (loc,src) = evar_source evk !evdref in
-	    let sigma =  !evdref in
-	    let evi = Evd.find_undefined sigma evk in
-	    (try
-	      let c = solvable_by_tactic env evi ev src in
-	      evdref := Evd.define evk c !evdref;
-	      c
-	    with Exit ->
-              if fail_evar then
-	        Pretype_errors.error_unsolvable_implicit loc env sigma evi src None
-              else
-                c)
-      | _ -> map_constr proc_rec c
-  in
-  let c = proc_rec c in
-  (* Side-effect *)
-  !evdref,c
-
 let interp_gen kind ist allow_patvar expand_evar fail_evar use_classes env sigma (c,ce) =
   let (ltacvars,unbndltacvars as vars) = extract_ltac_constr_values ist env in
   let c = match ce with
@@ -1290,13 +1238,14 @@ let interp_gen kind ist allow_patvar expand_evar fail_evar use_classes env sigma
       intern_gen (kind = IsType) ~allow_patvar ~ltacvars:ltacdata sigma env c
   in
   let trace = push_trace (dloc,LtacConstrInterp (c,vars)) ist.trace in
-  let evd,c =
+  let evdc =
     catch_error trace (understand_ltac expand_evar sigma env vars kind) c in
-  let evd,c =
+  let (evd,c) =
     if expand_evar then
-      solve_remaining_evars fail_evar use_classes env sigma evd c
+      solve_remaining_evars fail_evar use_classes
+        solve_by_implicit_tactic env sigma evdc
     else
-      evd,c in
+      evdc in
   db_constr ist.debug env c;
   (evd,c)
 
@@ -1314,6 +1263,9 @@ let interp_open_constr_gen kind ist =
 
 let interp_open_constr ccl =
   interp_open_constr_gen (OfType ccl)
+
+let interp_pure_open_constr ist =
+  interp_gen (OfType None) ist false false false false
 
 let interp_typed_pattern ist env sigma (c,_) =
   let sigma, c =
@@ -1566,16 +1518,14 @@ let interp_open_constr_with_bindings_loc ist env sigma ((c,_),bl as cb) =
   let sigma, cb = interp_open_constr_with_bindings ist env sigma cb in
   sigma, (loc,cb)
 
-let interp_induction_arg ist gl sigma arg =
-  let env = pf_env gl in
+let interp_induction_arg ist gl arg =
+  let env = pf_env gl and sigma = project gl in
   match arg with
   | ElimOnConstr c ->
-      let sigma, c = interp_constr_with_bindings ist env sigma c in
-      sigma, ElimOnConstr c
-  | ElimOnAnonHyp n as x -> sigma, x
+      ElimOnConstr (interp_constr_with_bindings ist env sigma c)
+  | ElimOnAnonHyp n as x -> x
   | ElimOnIdent (loc,id) ->
       try
-	sigma,
         match List.assoc id ist.lfun with
 	| VInteger n ->
 	    ElimOnAnonHyp n
@@ -1583,23 +1533,23 @@ let interp_induction_arg ist gl sigma arg =
 	    if Tactics.is_quantified_hypothesis id' gl
 	    then ElimOnIdent (loc,id')
 	    else
-	      (try ElimOnConstr (constr_of_id env id',NoBindings)
+	      (try ElimOnConstr (sigma,(constr_of_id env id',NoBindings))
 	       with Not_found ->
 		user_err_loc (loc,"",
 		pr_id id ++ strbrk " binds to " ++ pr_id id' ++ strbrk " which is neither a declared or a quantified hypothesis."))
 	| VConstr ([],c) ->
-	    ElimOnConstr (c,NoBindings)
+	    ElimOnConstr (sigma,(c,NoBindings))
 	| _ -> user_err_loc (loc,"",
 	      strbrk "Cannot coerce " ++ pr_id id ++
 	      strbrk " neither to a quantified hypothesis nor to a term.")
       with Not_found ->
 	(* We were in non strict (interactive) mode *)
 	if Tactics.is_quantified_hypothesis id gl then
-          sigma, ElimOnIdent (loc,id)
+          ElimOnIdent (loc,id)
 	else
           let c = (GVar (loc,id),Some (CRef (Ident (loc,id)))) in
           let c = interp_constr ist env sigma c in
-          sigma, ElimOnConstr (c,NoBindings)
+          ElimOnConstr (sigma,(c,NoBindings))
 
 (* Associates variables with values and gives the remaining variables and
    values *)
@@ -2293,7 +2243,14 @@ and interp_atomic ist gl tac =
   | TacGeneralizeDep c -> h_generalize_dep (pf_interp_constr ist gl c)
   | TacLetTac (na,c,clp,b) ->
       let clp = interp_clause ist gl clp in
-      h_let_tac b (interp_fresh_name ist env na) (pf_interp_constr ist gl c) clp
+      if clp = nowhere then
+        (* We try to fully-typechect the term *)
+        h_let_tac b (interp_fresh_name ist env na)
+          (pf_interp_constr ist gl c) clp
+      else
+        (* We try to keep the pattern structure as much as possible *)
+        h_let_pat_tac b (interp_fresh_name ist env na)
+          (interp_pure_open_constr ist env sigma c) clp
 
   (* Automation tactics *)
   | TacTrivial (lems,l) ->
@@ -2318,8 +2275,7 @@ and interp_atomic ist gl tac =
   | TacInductionDestruct (isrec,ev,(l,cls)) ->
       let sigma, l =
         list_fold_map (fun sigma (lc,cbo,(ipato,ipats)) ->
-          let sigma,lc =
-            list_fold_map (interp_induction_arg ist gl) sigma lc in
+          let lc = List.map (interp_induction_arg ist gl) lc in
 	  let sigma,cbo =
             Option.fold_map (interp_constr_with_bindings ist env) sigma cbo in
           (sigma,(lc,cbo,

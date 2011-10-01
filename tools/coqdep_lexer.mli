@@ -6,18 +6,18 @@
 (*         *       GNU Lesser General Public License Version 2.1        *)
 (************************************************************************)
 
-(** This file gathers environment variables needed by Coq to run (such
-   as coqlib) *)
+type mL_token = Use_module of string
 
-val coqlib : unit -> string
-val docdir : unit -> string
-val coqbin : string
-val coqroot : string
-(* coqpath is stored in reverse order, since that is the order it
- * gets added to the searc path *)
-val coqpath : unit -> string list
+type coq_token =
+    Require of string list list
+  | RequireString of string
+  | Declare of string list
+  | Load of string
 
-val camlbin : unit -> string
-val camlp4bin : unit -> string
-val camllib : unit -> string
-val camlp4lib : unit -> string
+exception Fin_fichier
+exception Syntax_error of int * int
+
+val coq_action : Lexing.lexbuf -> coq_token
+val caml_action : Lexing.lexbuf -> mL_token
+val mllib_list : Lexing.lexbuf -> string list
+val ocamldep_parse : Lexing.lexbuf -> string list
